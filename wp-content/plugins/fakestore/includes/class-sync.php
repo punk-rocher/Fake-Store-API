@@ -5,35 +5,60 @@ if (!defined('ABSPATH'))
 class FSYNC_Sync
 {
 
-    // Import products from FakeStore
-    public function import_products($limit = 100)
+    public function import_products($limit = 200)
     {
-        $api_url = get_option('fsync_api_url', 'https://fakestoreapi.com/products') . '?limit=' . intval($limit);
-        $response = wp_remote_get($api_url);
+        //API endpoint
+        $base_url = get_option('fsync_api_url', 'https://fakestoreapi.com');
+        $api_url = rtrim($base_url, '/') . '/products?limit=' . intval($limit);
 
-        if (is_wp_error($response))
-            return ['error' => 'API request failed'];
+        $response = wp_remote_get($api_url);
+        if (is_wp_error($response)) {
+            return ['error' => 'API request failed: ' . $response->get_error_message()];
+        }
 
         $products = json_decode(wp_remote_retrieve_body($response), true);
+        if (!is_array($products))
+            return ['error' => 'API did not return a valid product array'];
 
         $imported = 0;
         $updated = 0;
+        $skipped = 0;
+        $table_data = [];
 
         foreach ($products as $p) {
             $res = $this->create_or_update_product($p);
+
+            // Count totals
             if ($res['action'] === 'created')
                 $imported++;
-            else
+            elseif ($res['action'] === 'updated')
                 $updated++;
+            else
+                $skipped++;
+
+            // Add to table
+            $table_data[] = [
+                'id' => $p['id'],
+                'title' => $p['title'],
+                'image' => $p['image'],
+                'category' => $p['category'],
+                'description' => $p['description'], // add full description
+                'old_price' => $res['old_price'] ?? $p['price'],
+                'new_price' => $p['price'],
+                'action' => ucfirst($res['action']),
+                'status' => ($res['action'] === 'created') ? 'Created successfully' : (($res['action'] === 'updated') ? 'Updated successfully' : 'Already up to date'),
+            ];
         }
+
 
         return [
             'imported' => $imported,
-            'updated' => $updated
+            'updated' => $updated,
+            'skipped' => $skipped,
+            'table' => $table_data
         ];
     }
 
-    // Create or update WooCommerce product
     public function create_or_update_product($p)
     {
         $fakestore_id = intval($p['id']);
@@ -43,7 +68,7 @@ class FSYNC_Sync
         $category_name = sanitize_text_field($p['category']);
         $image_url = esc_url_raw($p['image']);
 
-        // Check if product exists
+        // Check existing product by fakestore_id
         $existing = get_posts([
             'post_type' => 'product',
             'meta_key' => '_fakestore_id',
@@ -51,9 +76,36 @@ class FSYNC_Sync
             'numberposts' => 1
         ]);
 
+        $action = 'created';
+        $post_id = 0;
+        $old_price = 0;
+
         if (!empty($existing)) {
             $post_id = $existing[0]->ID;
-            $action = 'updated';
+            $product = wc_get_product($post_id);
+            if (!$product)
+                return ['action' => 'skipped', 'status' => 'Invalid product', 'old_price' => 0];
+
+            $old_price = floatval($product->get_regular_price());
+            $changes_detected = false;
+
+            if ($old_price !== $price || $product->get_name() !== $title || $product->get_description() !== $desc) {
+                $changes_detected = true;
+            }
+
+            // Category check
+            $terms = wp_get_post_terms($post_id, 'product_cat', ['fields' => 'names']);
+            if (!in_array($category_name, $terms))
+                $changes_detected = true;
+
+            if ($changes_detected) {
+                wp_update_post(['ID' => $post_id, 'post_title' => $title, 'post_content' => $desc]);
+                $product->set_regular_price($price);
+                $product->set_price($price);
+                $product->save();
+                $action = 'updated';
+            } else
+                $action = 'skipped';
         } else {
             $post_id = wp_insert_post([
                 'post_title' => $title,
@@ -61,35 +113,38 @@ class FSYNC_Sync
                 'post_status' => 'publish',
                 'post_type' => 'product'
             ]);
-            $action = 'created';
+
+            if (!$post_id || is_wp_error($post_id)) {
+                return ['action' => 'skipped', 'status' => 'Failed to create product', 'old_price' => 0];
+            }
+
+            update_post_meta($post_id, '_fakestore_id', $fakestore_id);
+            $product = wc_get_product($post_id);
+            $product->set_regular_price($price);
+            $product->set_price($price);
+            $product->save();
         }
 
-        // Update price and meta
-        update_post_meta($post_id, '_fakestore_id', $fakestore_id);
-        update_post_meta($post_id, '_regular_price', $price);
-        update_post_meta($post_id, '_price', $price);
-        update_post_meta($post_id, '_stock_status', 'instock');
-
-        // Assign category
+        // Category
         if ($category_name) {
             $term = get_term_by('name', $category_name, 'product_cat');
-            if (!$term) {
+            if (!$term || is_wp_error($term)) {
                 $term_id = wp_insert_term($category_name, 'product_cat');
-                $term = get_term($term_id['term_id'], 'product_cat');
+                if (!is_wp_error($term_id))
+                    $term = get_term($term_id['term_id'], 'product_cat');
             }
-            if ($term)
-                wp_set_object_terms($post_id, $term->term_id, 'product_cat');
+            if ($term && !is_wp_error($term))
+                wp_set_object_terms($post_id, intval($term->term_id), 'product_cat');
         }
 
-        // Set featured image
-        if ($image_url && !get_post_meta($post_id, '_thumbnail_id', true)) {
+        // Image
+        if ($image_url)
             $this->set_product_image($post_id, $image_url);
-        }
 
-        return ['action' => $action, 'post_id' => $post_id];
+        return ['action' => $action, 'post_id' => $post_id, 'old_price' => $old_price, 'status' => ucfirst($action)];
     }
 
-    // Download and set image
+
     private function set_product_image($post_id, $url)
     {
         if (!function_exists('media_handle_sideload')) {

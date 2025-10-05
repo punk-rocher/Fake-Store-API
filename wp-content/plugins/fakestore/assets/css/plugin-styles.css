@@ -1,0 +1,70 @@
+/* Admin wrapper spacing */
+.fsync-wrap h1 {
+    margin-bottom: 20px;
+    color: #23282d;
+}
+
+.fsync-wrap h2 {
+    margin-top: 20px;
+    color: #0073aa;
+    border-bottom: 2px solid #0073aa;
+    padding-bottom: 5px;
+}
+
+.fsync-wrap p strong {
+    font-weight: 600;
+}
+
+/* API input field */
+.fsync-wrap input[type="text"] {
+    width: 100%;
+    max-width: 400px;
+    padding: 5px;
+    margin-top: 5px;
+}
+
+/* Sync button */
+#fsync-sync-btn {
+    margin-top: 10px;
+    padding: 8px 20px;
+    font-weight: bold;
+}
+
+/* Sync log */
+#fsync-sync-log {
+    margin-top: 15px;
+    font-size: 14px;
+    color: #333;
+    font-weight: bold;
+}
+
+/* Results table */
+#fsync-results table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+    font-size: 13px;
+}
+
+#fsync-results th,
+#fsync-results td {
+    padding: 8px 10px;
+    border: 1px solid #ddd;
+    text-align: left;
+}
+
+#fsync-results th {
+    background-color: #f7f7f7;
+    color: #333;
+}
+
+#fsync-results tr:nth-child(even) {
+    background-color: #fafafa;
+}
+
+#fsync-results img {
+    border-radius: 4px;
+    object-fit: cover;
+    width: 50px;
+    height: 50px;
+}
